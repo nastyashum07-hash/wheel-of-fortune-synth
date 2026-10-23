@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+  <meta charset="utf-8" /><title>Web Audio regression check</title>
+  <body>
+    <h1>Проверка реального Web Audio</h1>
+    <button id="run">Проверить звук</button>
+    <pre id="results">Ожидание запуска</pre>
+    <script src="../dist/state.js"></script>
+    <script src="../dist/melody.js"></script>
+    <script src="../dist/audio.js"></script>
+    <script src="../dist/sequencer.js"></script>
+    <script>
+      figures.snake = figures.anubis = { classList: { add() {}, remove() {} } };
+      function stats(buffer) {
+        const left = buffer.getChannelData(0),
+          right = buffer.getChannelData(1);
+        let l = 0,
+          r = 0,
+          peak = 0;
+        for (let n = 0; n < left.length; n++) {
+          if (!Number.isFinite(left[n]) || !Number.isFinite(right[n]))
+            throw Error("Non-finite sample");
+          l += left[n] ** 2;
+          r += right[n] ** 2;
+          peak = Math.max(peak, Math.abs(left[n]), Math.abs(right[n]));
+        }
+        return {
+          left: Math.sqrt(l / left.length),
+          right: Math.sqrt(r / right.length),
+          peak,
+        };
+      }
+      async function render(voice, fx = {}, master = 0.6) {
+        buildAudioGraph(new OfflineAudioContext(2, 22050 * 5, 22050));
+        Object.assign(S, {
+          playing: false,
+          master,
+          cutoff: 0.8,
+          attack: 0.15,
+          decay: 0.3,
+          sustain: 0.5,
+          release: 0.2,
+          vol: [0.6, 0.6],
+          voices: [true, true],
+          fx: { reverb: 0, delay: 0, chorus: 0, drive: 0, ...fx },
+        });
+        muted = false;
+        melody = new FortuneMelody(42, 0);
+        applyAudio();
+        note(voice, 0.5, voice ? 4 : 0);
+        return ctx.startRendering();
+      }
+      function difference(a, b) {
+        let sum = 0;
+        const x = a.getChannelData(0),
+          y = b.getChannelData(0);
+        for (let n = 0; n < x.length; n++) sum += (x[n] - y[n]) ** 2;
+        return Math.sqrt(sum / x.length);
+      }
+      document.querySelector("#run").onclick = async () => {
+        const out = document.querySelector("#results");
+        const lines = [];
+        out.textContent = "Выполняется…";
+        try {
+          for (const voice of [0, 1]) {
+            const dry = await render(voice),
+              s = stats(dry);
+            if (s.peak <= 0.001 || s.peak >= 1) throw Error("Silence/clipping");
+            if ((voice ? s.right / s.left : s.left / s.right) < 3)
+              throw Error("Stereo direction failed");
+            lines.push("Voice " + voice + " dry " + JSON.stringify(s));
+            out.textContent = lines.join("\n");
+            for (const fx of ["delay", "reverb", "chorus", "drive"]) {
+              const wet = await render(voice, { [fx]: 0.8 });
+              const diff = difference(dry, wet);
+              if (diff < 0.000001)
+                throw Error(fx + " has no audible signal effect");
+              lines.push(
+                "Voice " + voice + " " + fx + " difference " + diff.toFixed(6),
+              );
+              out.textContent = lines.join("\n");
+            }
+            const silent = stats(await render(voice, {}, 0));
+            if (silent.peak > 0.000001) throw Error("Master mute failed");
+          }
+          out.textContent =
+            lines.join("\n") +
+            "\nPASS: both voices, stereo direction, all four FX, finite samples, no clipping, master mute.";
+          out.dataset.status = "passed";
+        } catch (e) {
+          out.textContent += "\nFAIL: " + e.stack;
+          out.dataset.status = "failed";
+        }
+      };
+    </script>
+  </body>
+</html>
